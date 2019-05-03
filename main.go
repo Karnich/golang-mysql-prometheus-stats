@@ -5,6 +5,7 @@ import (
   "os"
   "log"
   "fmt"
+  "time"
 
   "net/http"
   "github.com/prometheus/client_golang/prometheus"
@@ -14,10 +15,15 @@ import (
   _ "github.com/joho/godotenv/autoload"
 )
 
-func GetCount(query string, db *sql.DB) float64 {
+func GetCount(gauge Gauge, db *sql.DB) float64 {
   var cnt float64
 
-  err := db.QueryRow(query).Scan(&cnt)
+  start := time.Now()
+
+  err := db.QueryRow(gauge.Query).Scan(&cnt)
+
+  elapsed := time.Since(start)
+  log.Printf("Query %s_%s took %s", gauge.Subsystem, gauge.Name, elapsed)
 
   if err != nil {
     log.Fatal(err)
@@ -29,12 +35,8 @@ func main() {
     log.Println("mysql user count started")
    
 		var (
-      subsystem = os.Getenv("SUBSYSTEM")
-      name = os.Getenv("NAME")
-      help = os.Getenv("HELP")
 			username = os.Getenv("DB_USER")
       password = os.Getenv("DB_PASSWORD")
-      query = os.Getenv("QUERY")
       host = os.Getenv("DB_HOST")
       port = os.Getenv("DB_PORT")
       database = os.Getenv("DB_NAME")
@@ -51,17 +53,30 @@ func main() {
     // executing 
     defer db.Close()
 
-    if err := prometheus.Register(prometheus.NewGaugeFunc(
-      prometheus.GaugeOpts{
-          Subsystem: subsystem,
-          Name:      name,
-          Help:      help,
-      },
-      func() float64 { return GetCount(query, db) },
-    )); err == nil {
-        log.Println("GaugeFunc 'user count' registered.")
+    metrics, err := LoadJson();
+    if err != nil {
+      log.Fatal(fmt.Printf("%+v\n", err))
     }
-    
+
+    for i := 0; i < len(metrics.MetricTypes.Gauges); i++ {
+      index := i;
+      if err := prometheus.Register(prometheus.NewGaugeFunc(
+        prometheus.GaugeOpts{
+            Subsystem: metrics.MetricTypes.Gauges[index].Subsystem,
+            Name:      metrics.MetricTypes.Gauges[index].Name,
+            Help:      metrics.MetricTypes.Gauges[index].Help,
+        },
+        func() float64 { return GetCount(metrics.MetricTypes.Gauges[index], db) },
+      )); 
+      err == nil {
+        log.Println(fmt.Printf("GaugeFunc %s registered.", metrics.MetricTypes.Gauges[i].Name))
+      }
+      if err != nil {
+        fmt.Printf("%+v\n", err)
+      }
+    }
+
     http.Handle("/metrics", promhttp.Handler())
 	  log.Fatal(http.ListenAndServe(":8080", nil))     
 }
+
